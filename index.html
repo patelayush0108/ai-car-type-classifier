@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Car Type Classifier</title>
+  <style>
+    :root { --ink:#172033; --muted:#667085; --line:#e6eaf0; --blue:#3457d5; --purple:#7c3aed; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial,Helvetica,sans-serif; color:var(--ink); background:linear-gradient(135deg,#f7f8ff,#edf5ff); min-height:100vh; }
+    header { padding:34px 20px 28px; text-align:center; color:white; background:linear-gradient(110deg,#e83e8c,#7655e8); }
+    .logo { font-size:34px; margin-bottom:8px; } h1 { margin:0; font-size:clamp(27px,4vw,40px); }
+    header p { margin:10px auto 0; max-width:650px; line-height:1.6; }
+    main { width:min(1000px,calc(100% - 32px)); margin:32px auto 44px; }
+    .layout { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+    .card { background:white; border:1px solid var(--line); border-radius:20px; padding:24px; box-shadow:0 14px 38px #243b5310; }
+    .card h2 { margin:0 0 8px; font-size:20px; } .muted { color:var(--muted); line-height:1.55; font-size:14px; }
+    .drop { display:flex; min-height:260px; margin-top:18px; border:2px dashed #c8d0e3; border-radius:16px; align-items:center; justify-content:center; flex-direction:column; padding:18px; text-align:center; background:#fafbff; overflow:hidden; cursor:pointer; }
+    .drop.drag { border-color:var(--blue); background:#f0f4ff; } .drop img { max-width:100%; max-height:300px; object-fit:contain; border-radius:10px; }
+    .upload-icon { font-size:45px; } input[type=file] { display:none; }
+    .btn { border:0; border-radius:12px; padding:13px 17px; font-weight:700; cursor:pointer; font-size:14px; }
+    .btn:disabled { opacity:.55; cursor:not-allowed; } .primary { color:white; background:linear-gradient(110deg,var(--blue),var(--purple)); }
+    .secondary { color:#334155; background:#eef2ff; } .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
+    .result { margin-top:18px; padding:18px; border-radius:14px; background:#f7f8fc; border:1px solid var(--line); }
+    .result-label { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; font-weight:800; }
+    .prediction { font-size:25px; font-weight:800; margin:7px 0; } .status { font-size:13px; color:var(--muted); line-height:1.5; }
+    .bar-row { display:grid; grid-template-columns:105px 1fr 46px; gap:8px; align-items:center; margin-top:12px; font-size:12px; }
+    .bar { height:8px; border-radius:10px; background:#e9edf5; overflow:hidden; } .bar > span { display:block; height:100%; background:linear-gradient(90deg,#3457d5,#9b5de5); border-radius:10px; }
+    .small-note { margin-top:18px; font-size:12px; color:var(--muted); line-height:1.55; }
+    .loader { display:inline-block; width:16px; height:16px; border:2px solid #ffffff70; border-top-color:white; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; margin-right:7px; }
+    @keyframes spin { to { transform:rotate(360deg); } } footer { text-align:center; color:var(--muted); padding:0 16px 28px; font-size:12px; }
+    @media(max-width:760px) { .layout { grid-template-columns:1fr; } .card { padding:19px; } }
+  </style>
+</head>
+<body>
+<header><div class="logo">🚘</div><h1>AI Car Type Classifier</h1><p>Upload a car photo and let an AI vision model estimate its vehicle category.</p></header>
+<main><div class="layout">
+  <section class="card">
+    <h2>Upload a car image</h2><p class="muted">Choose a clear photo of one vehicle. JPG, PNG and WEBP images are supported.</p>
+    <input id="fileInput" type="file" accept="image/*" />
+    <div id="dropZone" class="drop" role="button" tabindex="0" aria-label="Choose car image">
+      <div id="placeholder"><div class="upload-icon">📷</div><strong>Drop an image here</strong><p class="muted">or click to browse your device</p></div>
+      <img id="preview" alt="Uploaded car preview" hidden />
+    </div>
+    <div class="actions"><button class="btn secondary" id="chooseBtn">Choose image</button><button class="btn primary" id="predictBtn" disabled>✨ Predict car type</button></div>
+    <p class="small-note">The AI model runs in your browser after downloading its model files. The first run may take several minutes and needs an internet connection. No API key is required.</p>
+  </section>
+  <section class="card">
+    <h2>Prediction result</h2><p class="muted">The AI compares your photo against common vehicle categories.</p>
+    <div class="result" aria-live="polite"><div class="result-label">Predicted category</div><div class="prediction" id="prediction">Waiting for image</div><div class="status" id="status">Choose a car image, then click “Predict car type”.</div><div id="scores"></div></div>
+    <p class="small-note">Categories: SUV, hatchback, sedan, sports car, pickup truck, and van/minivan. Scores are model estimates, not guarantees.</p>
+  </section>
+</div></main>
+<footer>Practical 15 · Cloud-based AI model demonstration · HTML, CSS and JavaScript</footer>
+<script type="module">
+  import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+  env.allowLocalModels = false;
+  const fileInput = document.getElementById('fileInput');
+  const dropZone = document.getElementById('dropZone');
+  const preview = document.getElementById('preview');
+  const placeholder = document.getElementById('placeholder');
+  const chooseBtn = document.getElementById('chooseBtn');
+  const predictBtn = document.getElementById('predictBtn');
+  const predictionEl = document.getElementById('prediction');
+  const statusEl = document.getElementById('status');
+  const scoresEl = document.getElementById('scores');
+  let selectedFile = null;
+  let classifierPromise = null;
+  const categories = [
+    'an SUV car', 'a hatchback car', 'a sedan car',
+    'a sports car', 'a pickup truck', 'a van or minivan'
+  ];
+  function setStatus(message) { statusEl.textContent = message; }
+  function selectFile(file) {
+    if (!file || !file.type.startsWith('image/')) { setStatus('Please select a valid image file.'); return; }
+    selectedFile = file;
+    preview.src = URL.createObjectURL(file);
+    preview.hidden = false; placeholder.hidden = true;
+    predictBtn.disabled = false; predictionEl.textContent = 'Ready to classify';
+    scoresEl.replaceChildren(); setStatus('Image selected. Click “Predict car type” to run the AI.');
+  }
+  chooseBtn.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+  fileInput.addEventListener('change', e => selectFile(e.target.files[0]));
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+  dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag'); selectFile(e.dataTransfer.files[0]); });
+
+  predictBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    predictBtn.disabled = true; predictBtn.innerHTML = '<span class="loader"></span>Loading AI...';
+    predictionEl.textContent = 'Loading model…'; scoresEl.replaceChildren();
+    try {
+      if (!classifierPromise) {
+        setStatus('Downloading the AI model for the first time. Please keep this tab open.');
+        classifierPromise = pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32');
+      }
+      const classifier = await classifierPromise;
+      predictBtn.innerHTML = '<span class="loader"></span>Analyzing image...';
+      setStatus('Model ready. Analyzing your image…');
+      const results = await classifier(preview, categories);
+      if (!results || !results.length) throw new Error('The model returned no predictions. Try another image.');
+      const displayName = label => label.replace(/^an? /i, '').replace(/^a /i, '').replace(/ car$/i, '').replace('van or minivan', 'van / minivan');
+      predictionEl.textContent = displayName(results[0].label);
+      setStatus('Prediction completed. AI results may be incorrect, especially for unusual angles or multiple vehicles.');
+      results.slice(0, 6).forEach(item => {
+        const pct = Math.max(0, Math.min(100, item.score * 100));
+        const row = document.createElement('div'); row.className = 'bar-row';
+        const name = document.createElement('span'); name.textContent = displayName(item.label);
+        const bar = document.createElement('div'); bar.className = 'bar';
+        const fill = document.createElement('span'); fill.style.width = pct + '%'; bar.appendChild(fill);
+        const score = document.createElement('strong'); score.textContent = pct.toFixed(1) + '%';
+        row.append(name, bar, score); scoresEl.appendChild(row);
+      });
+    } catch (err) {
+      predictionEl.textContent = 'Could not classify';
+      setStatus((err && err.message ? err.message : 'Something went wrong.') + ' Check your internet connection and try again. If the model cannot load, use Google Colab as a backup.');
+      console.error(err);
+    } finally {
+      predictBtn.disabled = !selectedFile; predictBtn.textContent = '✨ Predict car type';
+    }
+  });
+</script>
+</body></html>
